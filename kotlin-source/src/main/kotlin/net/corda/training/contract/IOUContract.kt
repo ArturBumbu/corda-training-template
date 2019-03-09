@@ -3,6 +3,7 @@ package net.corda.training.contract
 import net.corda.core.contracts.CommandData
 import net.corda.core.contracts.Contract
 import net.corda.core.contracts.requireSingleCommand
+import net.corda.core.contracts.requireThat
 import net.corda.core.transactions.LedgerTransaction
 import net.corda.training.state.IOUState
 
@@ -25,6 +26,7 @@ class IOUContract : Contract {
         // Add commands here.
         // E.g
         // class DoSomething : TypeOnlyCommandData(), Commands
+        class Issue : Commands
     }
 
     /**
@@ -33,8 +35,16 @@ class IOUContract : Contract {
      */
     override fun verify(tx: LedgerTransaction) {
         // Add contract code here.
-        // requireThat {
-        //     ...
-        // }
+         requireThat {
+          tx.commands.requireSingleCommand(Commands.Issue::class.java)
+          "No inputs should be consumed when issuing an IOU." using (tx.inputs.isEmpty())
+          "Only one output state should be created when issuing an IOU." using (tx.outputs.size == 1)
+
+          val state = tx.outputStates.single() as IOUState
+          "A newly issued IOU must have a positive amount." using ( state.amount.quantity > 0)
+          "The lender and borrower cannot have the same identity." using (state.lender != state.borrower)
+          "Both lender and borrower together only may sign IOU issue transaction." using (tx.commands.requireSingleCommand(Commands.Issue::class.java).signers.toSet() == listOf(state.borrower.owningKey, state.lender.owningKey).toSet())
+         }
+
     }
 }
