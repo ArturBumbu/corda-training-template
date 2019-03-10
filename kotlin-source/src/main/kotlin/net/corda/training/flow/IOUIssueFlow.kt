@@ -1,18 +1,15 @@
 package net.corda.training.flow
 
 import co.paralleluniverse.fibers.Suspendable
+import net.corda.core.contracts.Command
+import net.corda.core.contracts.StateAndContract
 import net.corda.core.contracts.requireThat
-import net.corda.core.flows.CollectSignaturesFlow
-import net.corda.core.flows.FinalityFlow
-import net.corda.core.flows.FlowLogic
-import net.corda.core.flows.FlowSession
-import net.corda.core.flows.InitiatedBy
-import net.corda.core.flows.InitiatingFlow
-import net.corda.core.flows.SignTransactionFlow
-import net.corda.core.flows.StartableByRPC
+import net.corda.core.flows.*
 import net.corda.core.transactions.SignedTransaction
 import net.corda.core.transactions.TransactionBuilder
+import net.corda.training.contract.IOUContract
 import net.corda.training.state.IOUState
+
 
 /**
  * This is the flow which handles issuance of new IOUs on the ledger.
@@ -25,10 +22,26 @@ import net.corda.training.state.IOUState
 class IOUIssueFlow(val state: IOUState) : FlowLogic<SignedTransaction>() {
     @Suspendable
     override fun call(): SignedTransaction {
-        // Placeholder code to avoid type error when running the tests. Remove before starting the flow task!
-        return serviceHub.signInitialTransaction(
-                TransactionBuilder(notary = null)
+        val notary = serviceHub.networkMapCache.notaryIdentities[0]
+        var transactionBuilder = TransactionBuilder()
+        transactionBuilder.notary = notary
+        val issueCommand = IOUContract.Commands.Issue()
+        val pKeys = state.participants.map { it.hashCode() to it.owningKey }.toMap().values.toList()
+        transactionBuilder = transactionBuilder.withItems(Command(issueCommand, pKeys), StateAndContract(state, IOUContract.IOU_CONTRACT_ID))
+        transactionBuilder.verify(serviceHub)
+        val partlySignedTx = serviceHub.signInitialTransaction(
+                transactionBuilder
         )
+
+        // Creating a session with the other party.
+        val otherpartySession = initiateFlow(state.borrower)
+        // Obtaining the counterparty's signature.
+        val fullySignedTx = subFlow(CollectSignaturesFlow(partlySignedTx, listOf(otherpartySession),
+                CollectSignaturesFlow.tracker()))
+
+        // Finalising the transaction.
+        return subFlow(FinalityFlow(fullySignedTx))
+
     }
 }
 
@@ -37,7 +50,8 @@ class IOUIssueFlow(val state: IOUState) : FlowLogic<SignedTransaction>() {
  * The signing is handled by the [SignTransactionFlow].
  */
 @InitiatedBy(IOUIssueFlow::class)
-class IOUIssueFlowResponder(val flowSession: FlowSession): FlowLogic<Unit>() {
+class IOUIssueFlowResponder(val flowSession: FlowSession) : FlowLogic<Unit>() {
+
     @Suspendable
     override fun call() {
         val signedTransactionFlow = object : SignTransactionFlow(flowSession) {
